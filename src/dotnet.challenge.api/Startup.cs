@@ -1,62 +1,56 @@
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-using Microsoft.OpenApi.Models;
+using dotnet.challenge.api.Background;
+using dotnet.challenge.api.Services;
 using dotnet.challenge.data.Cache;
 using dotnet.challenge.data.Entities;
-using System;
+using Microsoft.OpenApi.Models;
 
-namespace dotnet.challenge.api
+namespace dotnet.challenge.api;
+
+public class Startup
 {
-    public class Startup
+    public Startup(IConfiguration configuration)
     {
-        public Startup(IConfiguration configuration)
+        Configuration = configuration;
+    }
+
+    public IConfiguration Configuration { get; }
+
+    public void ConfigureServices(IServiceCollection services)
+    {
+        services.AddControllers();
+
+        services.AddEndpointsApiExplorer();
+        services.AddSwaggerGen(c =>
         {
-            Configuration = configuration;
+            c.SwaggerDoc("v1", new OpenApiInfo { Title = "Inventory Reservations API", Version = "v1" });
+        });
+
+        services.AddSingleton<ISimpleObjectCache<Guid, Product>, SimpleObjectCache<Guid, Product>>();
+        services.AddSingleton<ISimpleObjectCache<Guid, Reservation>, SimpleObjectCache<Guid, Reservation>>();
+        services.AddSingleton<IInventoryService, InventoryService>();
+
+        services.AddHostedService<ReservationExpirySweeper>();
+    }
+
+    public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+    {
+        if (env.IsDevelopment())
+        {
+            app.UseDeveloperExceptionPage();
         }
 
-        public IConfiguration Configuration { get; }
+        app.UseRouting();
 
-        // This method gets called by the runtime. Use this method to add services to the container.
-        public void ConfigureServices(IServiceCollection services)
+        app.UseSwagger();
+        app.UseSwaggerUI(c =>
         {
-            services.AddControllers();
-            services.AddMvc();
+            c.SwaggerEndpoint("/swagger/v1/swagger.json", "Inventory Reservations API V1");
+            c.RoutePrefix = "swagger";
+        });
 
-            services.AddSwaggerGen(c =>
-            {
-                c.SwaggerDoc("v1", new OpenApiInfo { Title = "My API", Version = "v1" });
-            });
-
-            services.AddSingleton<ISimpleObjectCache<Guid, User>, SimpleObjectCache<Guid, User>>();
-        }
-
-        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
-        public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+        app.UseEndpoints(endpoints =>
         {
-            if (env.IsDevelopment())
-            {
-                app.UseDeveloperExceptionPage();
-            }
-
-            app.UseRouting();
-
-            app.UseAuthorization();
-
-            app.UseSwagger();
-
-            app.UseSwaggerUI(c =>
-            {
-                c.SwaggerEndpoint("/swagger/v1/swagger.json", "My API V1");
-                c.RoutePrefix = string.Empty;
-            });
-
-            app.UseEndpoints(endpoints =>
-            {
-                endpoints.MapControllers();
-            });
-        }
+            endpoints.MapControllers();
+        });
     }
 }
