@@ -107,14 +107,37 @@ public class InventoryService : IInventoryService
         }
     }
 
-    public Task<ConfirmResult> ConfirmAsync(Guid reservationId)
+    public async Task<ConfirmResult> ConfirmAsync(Guid reservationId)
     {
-        // TODO: implement idempotent confirmation.
-        // - If reservation does not exist: return NotFound.
-        // - If already Confirmed: return AlreadyConfirmed (treated as success by the controller).
-        // - If Active and not expired: transition to Confirmed and return Success.
-        // - Otherwise (Released, Expired): return IllegalState.
-        throw new NotImplementedException();
+        await _gate.WaitAsync();
+        try
+        {
+            var reservation = await _reservations.GetAsync(reservationId);
+            if (reservation is null)
+            {
+                return ConfirmResult.NotFound;
+            }
+
+            await ExpireIfNeededAsync(reservation);
+
+            if (reservation.Status == ReservationStatus.Confirmed)
+            {
+                return ConfirmResult.AlreadyConfirmed;
+            }
+
+            if (reservation.Status != ReservationStatus.Active)
+            {
+                return ConfirmResult.IllegalState;
+            }
+
+            reservation.Status = ReservationStatus.Confirmed;
+            await _reservations.UpdateAsync(reservation.Id, reservation);
+            return ConfirmResult.Success;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public Task<ReleaseResult> ReleaseAsync(Guid reservationId)
