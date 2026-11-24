@@ -9,6 +9,7 @@ public sealed class FakeInventoryService : IInventoryService
     public Reservation? Reservation { get; set; }
     public ConfirmResult ConfirmResultValue { get; set; } = ConfirmResult.Success;
     public ReleaseResult ReleaseResultValue { get; set; } = ReleaseResult.Success;
+    public int SweepCount { get; private set; }
 
     public Task<Product> CreateProductAsync(string name, int stock) =>
         Task.FromResult(new Product { Id = Guid.NewGuid(), Name = name, Stock = stock });
@@ -24,5 +25,9 @@ public sealed class FakeInventoryService : IInventoryService
 
     public Task<ReleaseResult> ReleaseAsync(Guid reservationId) => Task.FromResult(ReleaseResultValue);
 
-    public Task SweepExpiredAsync() => Task.CompletedTask;
+    public Task SweepExpiredAsync()
+    {
+        SweepCount++;
+        return Task.CompletedTask;
+    }
 }

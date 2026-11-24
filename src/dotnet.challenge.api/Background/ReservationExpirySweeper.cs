@@ -6,7 +6,7 @@ namespace dotnet.challenge.api.Background;
 /// Periodically sweeps Active reservations whose ExpiresAt has passed and returns
 /// their quantity to the owning product's Stock.
 /// </summary>
-public class ReservationExpirySweeper : IHostedService
+public class ReservationExpirySweeper : BackgroundService
 {
     private readonly IServiceProvider _services;
     private readonly ILogger<ReservationExpirySweeper> _logger;
@@ -17,30 +17,29 @@ public class ReservationExpirySweeper : IHostedService
         _logger = logger;
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _ = Task.Run(() => Loop(cancellationToken));
-        return Task.CompletedTask;
-    }
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-    private void Loop(CancellationToken ct)
-    {
-        while (true)
+        try
         {
-            Thread.Sleep(TimeSpan.FromSeconds(1));
-
-            try
+            while (await timer.WaitForNextTickAsync(stoppingToken))
             {
-                using var scope = _services.CreateScope();
-                var inventory = scope.ServiceProvider.GetRequiredService<IInventoryService>();
-                inventory.SweepExpiredAsync().GetAwaiter().GetResult();
+                try
+                {
+                    using var scope = _services.CreateScope();
+                    var inventory = scope.ServiceProvider.GetRequiredService<IInventoryService>();
+                    await inventory.SweepExpiredAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Expiry sweep failed");
+                }
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Expiry sweep failed");
-            }
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Normal shutdown: the host requested cancellation.
         }
     }
 }
