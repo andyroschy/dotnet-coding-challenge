@@ -107,6 +107,6 @@ public class InventoryService : IInventoryService
     /// </summary>
     public static bool IsExpired(Reservation reservation)
     {
-        return reservation.ExpiresAt < DateTime.Now;
+        return reservation.ExpiresAt <= DateTime.UtcNow;
     }
 }
