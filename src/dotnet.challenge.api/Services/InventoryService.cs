@@ -8,6 +8,10 @@ public class InventoryService : IInventoryService
     private readonly ISimpleObjectCache<Guid, Product> _products;
     private readonly ISimpleObjectCache<Guid, Reservation> _reservations;
 
+    // The cache is thread-safe, but a compound transition is not. This gate
+    // serializes each complete state change for the single API instance.
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
     public InventoryService(
         ISimpleObjectCache<Guid, Product> products,
         ISimpleObjectCache<Guid, Reservation> reservations)
@@ -33,33 +37,41 @@ public class InventoryService : IInventoryService
     public async Task<(ReserveResult Result, Reservation? Reservation)> TryReserveAsync(
         Guid productId, int quantity, int ttlSeconds)
     {
-        var product = await _products.GetAsync(productId);
-        if (product is null)
+        await _gate.WaitAsync();
+        try
         {
-            return (ReserveResult.ProductNotFound, null);
+            var product = await _products.GetAsync(productId);
+            if (product is null)
+            {
+                return (ReserveResult.ProductNotFound, null);
+            }
+
+            if (product.Stock < quantity)
+            {
+                return (ReserveResult.InsufficientStock, null);
+            }
+
+            product.Stock -= quantity;
+            await _products.UpdateAsync(productId, product);
+
+            var now = DateTime.UtcNow;
+            var reservation = new Reservation
+            {
+                Id = Guid.NewGuid(),
+                ProductId = productId,
+                Quantity = quantity,
+                CreatedAt = now,
+                ExpiresAt = now.AddSeconds(ttlSeconds),
+                Status = ReservationStatus.Active
+            };
+            await _reservations.AddAsync(reservation.Id, reservation);
+
+            return (ReserveResult.Success, reservation);
         }
-
-        if (product.Stock < quantity)
+        finally
         {
-            return (ReserveResult.InsufficientStock, null);
+            _gate.Release();
         }
-
-        product.Stock -= quantity;
-        await _products.UpdateAsync(productId, product);
-
-        var now = DateTime.UtcNow;
-        var reservation = new Reservation
-        {
-            Id = Guid.NewGuid(),
-            ProductId = productId,
-            Quantity = quantity,
-            CreatedAt = now,
-            ExpiresAt = now.AddSeconds(ttlSeconds),
-            Status = ReservationStatus.Active
-        };
-        await _reservations.AddAsync(reservation.Id, reservation);
-
-        return (ReserveResult.Success, reservation);
     }
 
     public Task<Reservation?> GetReservationAsync(Guid id) => _reservations.GetAsync(id);
