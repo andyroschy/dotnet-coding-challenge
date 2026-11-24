@@ -140,13 +140,40 @@ public class InventoryService : IInventoryService
         }
     }
 
-    public Task<ReleaseResult> ReleaseAsync(Guid reservationId)
+    public async Task<ReleaseResult> ReleaseAsync(Guid reservationId)
     {
-        // TODO: implement idempotent release.
-        // - If reservation does not exist: return NotFound.
-        // - If already Released or Expired: return AlreadyReleased (no stock change).
-        // - If Active or Confirmed: transition to Released and return the reserved quantity to Product.Stock.
-        throw new NotImplementedException();
+        await _gate.WaitAsync();
+        try
+        {
+            var reservation = await _reservations.GetAsync(reservationId);
+            if (reservation is null)
+            {
+                return ReleaseResult.NotFound;
+            }
+
+            await ExpireIfNeededAsync(reservation);
+
+            if (reservation.Status is ReservationStatus.Released or ReservationStatus.Expired)
+            {
+                return ReleaseResult.AlreadyReleased;
+            }
+
+            reservation.Status = ReservationStatus.Released;
+            await _reservations.UpdateAsync(reservation.Id, reservation);
+
+            var product = await _products.GetAsync(reservation.ProductId);
+            if (product is not null)
+            {
+                product.Stock += reservation.Quantity;
+                await _products.UpdateAsync(product.Id, product);
+            }
+
+            return ReleaseResult.Success;
+        }
+        finally
+        {
+            _gate.Release();
+        }
     }
 
     public async Task SweepExpiredAsync()
