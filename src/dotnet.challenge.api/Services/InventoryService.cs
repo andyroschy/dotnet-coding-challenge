@@ -7,10 +7,8 @@ public class InventoryService : IInventoryService
 {
     private readonly ISimpleObjectCache<Guid, Product> _products;
     private readonly ISimpleObjectCache<Guid, Reservation> _reservations;
-
-    // The cache is thread-safe, but a compound transition is not. This gate
-    // serializes each complete state change for the single API instance.
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly KeyedSemaphore<Guid> _productLocks = new();
+    private readonly KeyedSemaphore<Guid> _reservationLocks = new();
 
     public InventoryService(
         ISimpleObjectCache<Guid, Product> products,
@@ -36,16 +34,8 @@ public class InventoryService : IInventoryService
 
     public async Task<Product?> GetProductAsync(Guid id)
     {
-        await _gate.WaitAsync();
-        try
-        {
-            await SweepExpiredCoreAsync();
-            return await _products.GetAsync(id);
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        await SweepExpiredCoreAsync();
+        return await _products.GetAsync(id);
     }
 
     public async Task<(IncreaseStockResult Result, Product? Product)> IncreaseStockAsync(
@@ -56,28 +46,21 @@ public class InventoryService : IInventoryService
             return (IncreaseStockResult.InvalidQuantity, null);
         }
 
-        await _gate.WaitAsync();
-        try
+        using var productLock = await _productLocks.LockAsync(productId);
+        var product = await _products.GetAsync(productId);
+        if (product is null)
         {
-            var product = await _products.GetAsync(productId);
-            if (product is null)
-            {
-                return (IncreaseStockResult.NotFound, null);
-            }
-
-            if ((long)product.Stock + quantity > int.MaxValue)
-            {
-                return (IncreaseStockResult.Overflow, null);
-            }
-
-            product.Stock += quantity;
-            await _products.UpdateAsync(productId, product);
-            return (IncreaseStockResult.Success, product);
+            return (IncreaseStockResult.NotFound, null);
         }
-        finally
+
+        if ((long)product.Stock + quantity > int.MaxValue)
         {
-            _gate.Release();
+            return (IncreaseStockResult.Overflow, null);
         }
+
+        product.Stock += quantity;
+        await _products.UpdateAsync(productId, product);
+        return (IncreaseStockResult.Success, product);
     }
 
     public async Task<(ReserveResult Result, Reservation? Reservation)> TryReserveAsync(
@@ -88,165 +71,145 @@ public class InventoryService : IInventoryService
             return (ReserveResult.InvalidQuantity, null);
         }
 
-        await _gate.WaitAsync();
-        try
+        await SweepExpiredCoreAsync();
+
+        // Lock order is always reservation, then product. This reservation is new,
+        // but taking its lock keeps every write path consistent and deadlock-free.
+        var reservationId = Guid.NewGuid();
+        using var reservationLock = await _reservationLocks.LockAsync(reservationId);
+        using var productLock = await _productLocks.LockAsync(productId);
+
+        var product = await _products.GetAsync(productId);
+        if (product is null)
         {
-            await SweepExpiredCoreAsync();
-
-            var product = await _products.GetAsync(productId);
-            if (product is null)
-            {
-                return (ReserveResult.ProductNotFound, null);
-            }
-
-            if (product.Stock < quantity)
-            {
-                return (ReserveResult.InsufficientStock, null);
-            }
-
-            product.Stock -= quantity;
-            await _products.UpdateAsync(productId, product);
-
-            var now = DateTime.UtcNow;
-            var reservation = new Reservation
-            {
-                Id = Guid.NewGuid(),
-                ProductId = productId,
-                Quantity = quantity,
-                CreatedAt = now,
-                ExpiresAt = now.AddSeconds(ttlSeconds),
-                Status = ReservationStatus.Active
-            };
-            await _reservations.AddAsync(reservation.Id, reservation);
-
-            return (ReserveResult.Success, reservation);
+            return (ReserveResult.ProductNotFound, null);
         }
-        finally
+
+        if (product.Stock < quantity)
         {
-            _gate.Release();
+            return (ReserveResult.InsufficientStock, null);
         }
+
+        product.Stock -= quantity;
+        await _products.UpdateAsync(productId, product);
+
+        var now = DateTime.UtcNow;
+        var reservation = new Reservation
+        {
+            Id = reservationId,
+            ProductId = productId,
+            Quantity = quantity,
+            CreatedAt = now,
+            ExpiresAt = now.AddSeconds(ttlSeconds),
+            Status = ReservationStatus.Active
+        };
+        await _reservations.AddAsync(reservation.Id, reservation);
+
+        return (ReserveResult.Success, reservation);
     }
 
     public async Task<Reservation?> GetReservationAsync(Guid id)
     {
-        await _gate.WaitAsync();
-        try
+        var reservation = await _reservations.GetAsync(id);
+        if (reservation is null || reservation.Status != ReservationStatus.Active || !IsExpired(reservation))
         {
-            var reservation = await _reservations.GetAsync(id);
-            if (reservation is not null)
-            {
-                await ExpireIfNeededAsync(reservation);
-            }
-
             return reservation;
         }
-        finally
+
+        using var reservationLock = await _reservationLocks.LockAsync(id);
+        reservation = await _reservations.GetAsync(id);
+        if (reservation is not null)
         {
-            _gate.Release();
+            await ExpireIfNeededAsync(reservation);
         }
+
+        return reservation;
     }
 
     public async Task<ConfirmResult> ConfirmAsync(Guid reservationId)
     {
-        await _gate.WaitAsync();
-        try
+        using var reservationLock = await _reservationLocks.LockAsync(reservationId);
+        var reservation = await _reservations.GetAsync(reservationId);
+        if (reservation is null)
         {
-            var reservation = await _reservations.GetAsync(reservationId);
-            if (reservation is null)
-            {
-                return ConfirmResult.NotFound;
-            }
-
-            await ExpireIfNeededAsync(reservation);
-
-            if (reservation.Status == ReservationStatus.Confirmed)
-            {
-                return ConfirmResult.AlreadyConfirmed;
-            }
-
-            if (reservation.Status != ReservationStatus.Active)
-            {
-                return ConfirmResult.IllegalState;
-            }
-
-            reservation.Status = ReservationStatus.Confirmed;
-            await _reservations.UpdateAsync(reservation.Id, reservation);
-            return ConfirmResult.Success;
+            return ConfirmResult.NotFound;
         }
-        finally
+
+        await ExpireIfNeededAsync(reservation);
+
+        if (reservation.Status == ReservationStatus.Confirmed)
         {
-            _gate.Release();
+            return ConfirmResult.AlreadyConfirmed;
         }
+
+        if (reservation.Status != ReservationStatus.Active)
+        {
+            return ConfirmResult.IllegalState;
+        }
+
+        reservation.Status = ReservationStatus.Confirmed;
+        await _reservations.UpdateAsync(reservation.Id, reservation);
+        return ConfirmResult.Success;
     }
 
     public async Task<ReleaseResult> ReleaseAsync(Guid reservationId)
     {
-        await _gate.WaitAsync();
-        try
+        using var reservationLock = await _reservationLocks.LockAsync(reservationId);
+        var reservation = await _reservations.GetAsync(reservationId);
+        if (reservation is null)
         {
-            var reservation = await _reservations.GetAsync(reservationId);
-            if (reservation is null)
-            {
-                return ReleaseResult.NotFound;
-            }
-
-            await ExpireIfNeededAsync(reservation);
-
-            if (reservation.Status == ReservationStatus.Confirmed)
-            {
-                return ReleaseResult.IllegalState;
-            }
-
-            if (reservation.Status is ReservationStatus.Released or ReservationStatus.Expired)
-            {
-                return ReleaseResult.AlreadyReleased;
-            }
-
-            reservation.Status = ReservationStatus.Released;
-            await _reservations.UpdateAsync(reservation.Id, reservation);
-
-            var product = await _products.GetAsync(reservation.ProductId);
-            if (product is not null)
-            {
-                product.Stock += reservation.Quantity;
-                await _products.UpdateAsync(product.Id, product);
-            }
-
-            return ReleaseResult.Success;
+            return ReleaseResult.NotFound;
         }
-        finally
+
+        await ExpireIfNeededAsync(reservation);
+
+        if (reservation.Status == ReservationStatus.Confirmed)
         {
-            _gate.Release();
+            return ReleaseResult.IllegalState;
         }
+
+        if (reservation.Status is ReservationStatus.Released or ReservationStatus.Expired)
+        {
+            return ReleaseResult.AlreadyReleased;
+        }
+
+        reservation.Status = ReservationStatus.Released;
+        await _reservations.UpdateAsync(reservation.Id, reservation);
+
+        using var productLock = await _productLocks.LockAsync(reservation.ProductId);
+        var product = await _products.GetAsync(reservation.ProductId);
+        if (product is not null)
+        {
+            product.Stock += reservation.Quantity;
+            await _products.UpdateAsync(product.Id, product);
+        }
+
+        return ReleaseResult.Success;
     }
 
-    public async Task SweepExpiredAsync()
-    {
-        await _gate.WaitAsync();
-        try
-        {
-            await SweepExpiredCoreAsync();
-        }
-        finally
-        {
-            _gate.Release();
-        }
-    }
+    public Task SweepExpiredAsync() => SweepExpiredCoreAsync();
 
     /// <summary>
-    /// Expires every active reservation whose TTL has elapsed. Caller holds <see cref="_gate"/>.
+    /// Expires every active reservation whose TTL has elapsed. Never holds a product
+    /// lock while acquiring reservation locks: each reservation is locked first.
     /// </summary>
     private async Task SweepExpiredCoreAsync()
     {
         foreach (var reservation in await _reservations.GetAllAsync())
         {
+            if (reservation.Status != ReservationStatus.Active || !IsExpired(reservation))
+            {
+                continue;
+            }
+
+            using var reservationLock = await _reservationLocks.LockAsync(reservation.Id);
             await ExpireIfNeededAsync(reservation);
         }
     }
 
     /// <summary>
     /// Transitions an expired Active reservation to Expired and restores its stock exactly once.
-    /// Caller holds <see cref="_gate"/>.
+    /// Caller holds the reservation lock.
     /// </summary>
     private async Task ExpireIfNeededAsync(Reservation reservation)
     {
@@ -258,6 +221,7 @@ public class InventoryService : IInventoryService
         reservation.Status = ReservationStatus.Expired;
         await _reservations.UpdateAsync(reservation.Id, reservation);
 
+        using var productLock = await _productLocks.LockAsync(reservation.ProductId);
         var product = await _products.GetAsync(reservation.ProductId);
         if (product is not null)
         {
