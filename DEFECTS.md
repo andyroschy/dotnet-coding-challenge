@@ -6,6 +6,13 @@
 4. **Incorrect expiry clock** — `IsExpired` compared a UTC `ExpiresAt` with local `DateTime.Now`, making expiry timezone-dependent, so it now compares against `DateTime.UtcNow`.
 5. **Broken background-service lifecycle** — `ReservationExpirySweeper` started an untracked fire-and-forget loop that blocked with `Thread.Sleep`, synchronously waited on async work, and ignored shutdown cancellation, so it is now a `BackgroundService` using an awaited `PeriodicTimer` that observes the stopping token.
 
+## Additional hardening
+
+The original five scaffold defects are listed above; the items below are follow-up requirements rather than additional scaffold defects.
+
+- **Confirmed reservations** — Releasing a `Confirmed` reservation previously flipped it back to `Released` and returned its stock, so `ReleaseAsync` now returns `409 Conflict` without changing the status or stock.
+- **Negative inventory** — Direct service calls could create a product with negative stock or reserve a non-positive quantity, so `CreateProductAsync` now rejects negative stock and `TryReserveAsync` returns `InvalidQuantity`, which the controller maps to `400 Bad Request`.
+
 ## Scope
 
 The semaphore guarantees correctness for a single API instance; multiple instances would require a shared transactional datastore instead of process-local coordination.
