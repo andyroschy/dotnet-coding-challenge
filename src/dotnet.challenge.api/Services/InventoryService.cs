@@ -153,6 +153,11 @@ public class InventoryService : IInventoryService
 
             await ExpireIfNeededAsync(reservation);
 
+            if (reservation.Status == ReservationStatus.Confirmed)
+            {
+                return ReleaseResult.IllegalState;
+            }
+
             if (reservation.Status is ReservationStatus.Released or ReservationStatus.Expired)
             {
                 return ReleaseResult.AlreadyReleased;

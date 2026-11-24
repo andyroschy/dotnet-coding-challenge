@@ -72,6 +72,7 @@ public class ReservationsController : ControllerBase
             ReleaseResult.Success => NoContent(),
             ReleaseResult.AlreadyReleased => NoContent(),
             ReleaseResult.NotFound => NotFound(),
+            ReleaseResult.IllegalState => Conflict(new { error = "Confirmed reservations cannot be released." }),
             _ => StatusCode(StatusCodes.Status500InternalServerError)
         };
     }

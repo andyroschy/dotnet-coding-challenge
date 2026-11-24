@@ -40,14 +40,15 @@ public class ReleaseTests
     }
 
     [Fact]
-    public async Task Release_ConfirmedReservation_RestoresStock()
+    public async Task Release_ConfirmedReservation_DoesNotChangeStateOrStock()
     {
         var (svc, product, reservation) = await ActiveReservationAsync();
         await svc.ConfirmAsync(reservation.Id);
 
-        (await svc.ReleaseAsync(reservation.Id)).Should().Be(ReleaseResult.Success);
+        (await svc.ReleaseAsync(reservation.Id)).Should().Be(ReleaseResult.IllegalState);
 
-        (await svc.GetProductAsync(product.Id))!.Stock.Should().Be(5);
+        (await svc.GetReservationAsync(reservation.Id))!.Status.Should().Be(ReservationStatus.Confirmed);
+        (await svc.GetProductAsync(product.Id))!.Stock.Should().Be(3);
     }
 
     [Fact]

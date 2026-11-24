@@ -21,7 +21,8 @@ public enum ReleaseResult
 {
     Success,
     NotFound,
-    AlreadyReleased
+    AlreadyReleased,
+    IllegalState
 }
 
 public interface IInventoryService

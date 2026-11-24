@@ -79,4 +79,15 @@ public class ControllerTests
         fake.ReleaseResultValue = ReleaseResult.AlreadyReleased;
         (await controller.Release(Guid.NewGuid())).Should().BeOfType<NoContentResult>();
     }
+
+    [Fact]
+    public async Task Release_ConfirmedReservation_ReturnsConflict()
+    {
+        var fake = new FakeInventoryService { ReleaseResultValue = ReleaseResult.IllegalState };
+        var controller = new ReservationsController(fake);
+
+        var result = await controller.Release(Guid.NewGuid());
+
+        result.Should().BeOfType<ConflictObjectResult>();
+    }
 }

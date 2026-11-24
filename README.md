@@ -47,7 +47,7 @@ GET    /api/products/{id}                  get a product (includes current Stock
 POST   /api/reservations                   create a reservation
        body: { productId, quantity, ttlSeconds }
 POST   /api/reservations/{id}/confirm      confirm (idempotent)
-DELETE /api/reservations/{id}              release (idempotent, returns stock)
+DELETE /api/reservations/{id}              release an Active reservation (idempotent for Released/Expired; Confirmed is final)
 GET    /api/reservations/{id}              get a reservation (includes current Status)
 ```
 
@@ -60,6 +60,7 @@ Some of these are partially implemented in the scaffold. Complete the rest.
 3. **Idempotency.**
    - Confirming an already-`Confirmed` reservation is a no-op and returns 200.
    - Releasing an already-`Released` (or `Expired`) reservation is a no-op and returns 204.
+   - A `Confirmed` reservation is final: attempting to release it returns 409 Conflict and leaves both its status and the product's stock unchanged.
    - Confirming an `Expired` or `Released` reservation must fail with an appropriate error status.
 4. **Stock arithmetic.** Releasing or expiring a reservation restores exactly the reserved quantity, no more and no less, regardless of ordering.
 
