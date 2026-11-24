@@ -9,12 +9,17 @@ public sealed class FakeInventoryService : IInventoryService
     public Reservation? Reservation { get; set; }
     public ConfirmResult ConfirmResultValue { get; set; } = ConfirmResult.Success;
     public ReleaseResult ReleaseResultValue { get; set; } = ReleaseResult.Success;
+    public IncreaseStockResult IncreaseStockResultValue { get; set; } = IncreaseStockResult.Success;
+    public Product? IncreasedProduct { get; set; }
     public int SweepCount { get; private set; }
 
     public Task<Product> CreateProductAsync(string name, int stock) =>
         Task.FromResult(new Product { Id = Guid.NewGuid(), Name = name, Stock = stock });
 
     public Task<Product?> GetProductAsync(Guid id) => Task.FromResult<Product?>(null);
+
+    public Task<(IncreaseStockResult Result, Product? Product)> IncreaseStockAsync(Guid productId, int quantity) =>
+        Task.FromResult((IncreaseStockResultValue, IncreasedProduct));
 
     public Task<(ReserveResult Result, Reservation? Reservation)> TryReserveAsync(
         Guid productId, int quantity, int ttlSeconds) => Task.FromResult((ReserveResult, Reservation));

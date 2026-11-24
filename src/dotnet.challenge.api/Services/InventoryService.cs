@@ -48,6 +48,38 @@ public class InventoryService : IInventoryService
         }
     }
 
+    public async Task<(IncreaseStockResult Result, Product? Product)> IncreaseStockAsync(
+        Guid productId, int quantity)
+    {
+        if (quantity < 1)
+        {
+            return (IncreaseStockResult.InvalidQuantity, null);
+        }
+
+        await _gate.WaitAsync();
+        try
+        {
+            var product = await _products.GetAsync(productId);
+            if (product is null)
+            {
+                return (IncreaseStockResult.NotFound, null);
+            }
+
+            if ((long)product.Stock + quantity > int.MaxValue)
+            {
+                return (IncreaseStockResult.Overflow, null);
+            }
+
+            product.Stock += quantity;
+            await _products.UpdateAsync(productId, product);
+            return (IncreaseStockResult.Success, product);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<(ReserveResult Result, Reservation? Reservation)> TryReserveAsync(
         Guid productId, int quantity, int ttlSeconds)
     {

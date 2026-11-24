@@ -43,6 +43,7 @@ The service tracks **products** (each with some available stock) and lets client
 ```
 POST   /api/products                       create a product
 GET    /api/products/{id}                  get a product (includes current Stock)
+POST   /api/products/{id}/stock/increase   increase available stock by a positive quantity
 
 POST   /api/reservations                   create a reservation
        body: { productId, quantity, ttlSeconds }
@@ -63,7 +64,7 @@ Some of these are partially implemented in the scaffold. Complete the rest.
    - A `Confirmed` reservation is final: attempting to release it returns 409 Conflict and leaves both its status and the product's stock unchanged.
    - Confirming an `Expired` or `Released` reservation must fail with an appropriate error status.
 4. **Stock arithmetic.** Releasing or expiring a reservation restores exactly the reserved quantity, no more and no less, regardless of ordering.
-5. **Non-negative inventory.** Product stock starts at zero or more and every reservation quantity must be at least one; invalid values are rejected with `400 Bad Request`.
+5. **Non-negative inventory.** Product stock starts at zero or more and every reservation or stock-increase quantity must be at least one; invalid values are rejected with `400 Bad Request`, and stock can only be increased through `POST /api/products/{id}/stock/increase`.
 
 ### HTTP status codes
 
