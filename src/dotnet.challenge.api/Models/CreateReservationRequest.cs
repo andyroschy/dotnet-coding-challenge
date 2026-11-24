@@ -5,6 +5,7 @@ namespace dotnet.challenge.api.Models;
 public class CreateReservationRequest
 {
     [Required]
+    [NotEmptyGuid]
     public Guid ProductId { get; set; }
 
     [Range(1, int.MaxValue)]
