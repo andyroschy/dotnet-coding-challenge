@@ -63,6 +63,7 @@ Some of these are partially implemented in the scaffold. Complete the rest.
    - A `Confirmed` reservation is final: attempting to release it returns 409 Conflict and leaves both its status and the product's stock unchanged.
    - Confirming an `Expired` or `Released` reservation must fail with an appropriate error status.
 4. **Stock arithmetic.** Releasing or expiring a reservation restores exactly the reserved quantity, no more and no less, regardless of ordering.
+5. **Non-negative inventory.** Product stock starts at zero or more and every reservation quantity must be at least one; invalid values are rejected with `400 Bad Request`.
 
 ### HTTP status codes
 

@@ -22,6 +22,8 @@ public class InventoryService : IInventoryService
 
     public async Task<Product> CreateProductAsync(string name, int stock)
     {
+        ArgumentOutOfRangeException.ThrowIfNegative(stock);
+
         var product = new Product
         {
             Id = Guid.NewGuid(),
@@ -49,6 +51,11 @@ public class InventoryService : IInventoryService
     public async Task<(ReserveResult Result, Reservation? Reservation)> TryReserveAsync(
         Guid productId, int quantity, int ttlSeconds)
     {
+        if (quantity < 1)
+        {
+            return (ReserveResult.InvalidQuantity, null);
+        }
+
         await _gate.WaitAsync();
         try
         {

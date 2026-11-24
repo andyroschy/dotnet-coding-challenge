@@ -6,7 +6,8 @@ public enum ReserveResult
 {
     Success,
     ProductNotFound,
-    InsufficientStock
+    InsufficientStock,
+    InvalidQuantity
 }
 
 public enum ConfirmResult

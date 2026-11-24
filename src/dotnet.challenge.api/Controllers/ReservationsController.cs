@@ -33,6 +33,9 @@ public class ReservationsController : ControllerBase
             case ReserveResult.InsufficientStock:
                 return Conflict(new { error = "Insufficient stock." });
 
+            case ReserveResult.InvalidQuantity:
+                return BadRequest(new { error = "Quantity must be at least 1." });
+
             default:
                 return StatusCode(StatusCodes.Status500InternalServerError);
         }
