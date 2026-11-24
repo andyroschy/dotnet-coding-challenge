@@ -32,7 +32,19 @@ public class InventoryService : IInventoryService
         return product;
     }
 
-    public Task<Product?> GetProductAsync(Guid id) => _products.GetAsync(id);
+    public async Task<Product?> GetProductAsync(Guid id)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            await SweepExpiredCoreAsync();
+            return await _products.GetAsync(id);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public async Task<(ReserveResult Result, Reservation? Reservation)> TryReserveAsync(
         Guid productId, int quantity, int ttlSeconds)
@@ -40,6 +52,8 @@ public class InventoryService : IInventoryService
         await _gate.WaitAsync();
         try
         {
+            await SweepExpiredCoreAsync();
+
             var product = await _products.GetAsync(productId);
             if (product is null)
             {
@@ -74,7 +88,24 @@ public class InventoryService : IInventoryService
         }
     }
 
-    public Task<Reservation?> GetReservationAsync(Guid id) => _reservations.GetAsync(id);
+    public async Task<Reservation?> GetReservationAsync(Guid id)
+    {
+        await _gate.WaitAsync();
+        try
+        {
+            var reservation = await _reservations.GetAsync(id);
+            if (reservation is not null)
+            {
+                await ExpireIfNeededAsync(reservation);
+            }
+
+            return reservation;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
 
     public Task<ConfirmResult> ConfirmAsync(Guid reservationId)
     {
@@ -95,11 +126,50 @@ public class InventoryService : IInventoryService
         throw new NotImplementedException();
     }
 
-    public Task SweepExpiredAsync()
+    public async Task SweepExpiredAsync()
     {
-        // TODO: find every Active reservation whose ExpiresAt has passed, mark it Expired,
-        // and return its quantity to the product's Stock.
-        throw new NotImplementedException();
+        await _gate.WaitAsync();
+        try
+        {
+            await SweepExpiredCoreAsync();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// Expires every active reservation whose TTL has elapsed. Caller holds <see cref="_gate"/>.
+    /// </summary>
+    private async Task SweepExpiredCoreAsync()
+    {
+        foreach (var reservation in await _reservations.GetAllAsync())
+        {
+            await ExpireIfNeededAsync(reservation);
+        }
+    }
+
+    /// <summary>
+    /// Transitions an expired Active reservation to Expired and restores its stock exactly once.
+    /// Caller holds <see cref="_gate"/>.
+    /// </summary>
+    private async Task ExpireIfNeededAsync(Reservation reservation)
+    {
+        if (reservation.Status != ReservationStatus.Active || !IsExpired(reservation))
+        {
+            return;
+        }
+
+        reservation.Status = ReservationStatus.Expired;
+        await _reservations.UpdateAsync(reservation.Id, reservation);
+
+        var product = await _products.GetAsync(reservation.ProductId);
+        if (product is not null)
+        {
+            product.Stock += reservation.Quantity;
+            await _products.UpdateAsync(product.Id, product);
+        }
     }
 
     /// <summary>
